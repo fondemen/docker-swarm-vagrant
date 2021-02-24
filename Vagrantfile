@@ -63,6 +63,12 @@ else
   etcd_size = 0
 end
 etcdctl_api = read_env 'ETCDCTL_API', 3
+if read_bool_env 'ETCD_PORT'
+    etcd_port = read_env 'ETCD_PORT', 0
+    etcd_port = 2379 unless etcd_port.is_a? Integer
+else
+    etcd_port = 0
+end
 
 box = read_env 'BOX', 'bento/debian-10' # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -73,31 +79,14 @@ vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.10.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.10.100").split('.').map {|nbr| nbr.to_i} # private ip
 hostname_prefix = read_env 'PREFIX', 'node'
 
 upgrade = read_bool_env 'UPGRADE', false
 guest_additions = read_bool_env 'GUEST_ADDITIONS', false
 
-public = read_bool_env 'PUBLIC', false
-private = read_bool_env 'PRIVATE', true
-public_itf = 'eth1' # depends on chosen box and order of interface declaration
-private_itf = if public then 'eth2' else 'eth1' end # depends on chosen box
-default_itf = read_env 'DEFAULT_PUBLIC_ITF', if public then public_itf else private_itf end # default gateway
-internal_itf = case ENV['INTERNAL_ITF']
-    when 'public'
-        raise 'Cannot use public interface in case it is disabled ; state PUBLIC=yes' unless public
-        public_itf
-    when 'private'
-        raise 'Cannot use private interface in case it is disabled ; state PRIVATE=yes' unless private
-        private_itf
-    when String
-        ENV['ETCD_ITF'].strip
-    else
-        if public then public_itf else private_itf end
-end # interface used for internal node communication (i.e. should it be public or private ?)
+default_itf = read_env 'DEFAULT_ITF', 'eth1'  # depends on chosen box
 exposed_ip_script = "ip -4 addr list #{default_itf} |  grep -v secondary | grep inet | sed 's/.*inet\\s*\\([0-9.]*\\).*/\\1/'"
-internal_ip_script = "ip -4 addr list #{internal_itf} |  grep -v secondary | grep inet | sed 's/.*inet\\s*\\([0-9.]*\\).*/\\1/'"
 
 definitions = (1..nodes).map do |node_number|
     hostname = "%s%02d" % [hostname_prefix, node_number]
@@ -109,48 +98,9 @@ definitions = (1..nodes).map do |node_number|
 end
 etcd_cluster = definitions[0, etcd_size].map { |definition| "#{definition[:hostname]}=http://#{definition[:ip]}:2380"}.join ',' if etcd_size > 0
 
-if public
-    require 'socket'
-    vagrant_host = Socket.gethostname || Socket.ip_address_list.find { |ai| ai.ipv4? && !ai.ipv4_loopback? }.ip_address
-    puts "this host is #{vagrant_host}"
-    require 'digest/md5' # used later for machine id generation so that dhcp returns the same IP
-end
-
-pub_key = read_env 'PUBLIC_ROOT_KEY', 'AAAAB3NzaC1yc2EAAAADAQABAAABAQDFCEEemETfqtunwT8G2A+aaqJlXME99G0LtSk2Nd7ER1uPt54lY6uxCs+5lz6c6WXS58XPHNOOfz8F9iUgyJqOM97Dj9HOaSAdmE+xvOHa5lf8fUpeb3GhRNvp8vnwQDfKG3wdrMLUlZjqMbJnH63C/H5nwQ4LybbfLc9XtL8D7PQEGW5SbUaEmULNO46JydEUWgtGodjc6UHs0YVor8e89Up5uy5a0MGIQeB2B6y6rkVc2+aNwUka8bY3O9HuLlJmB+iYKu9IP/pVwy3Y733FRyB7XJJL4T1jsMZfjbQoyPoEGVU5EC8j8dUy+XkUfCe5dWY1wdNDG9oBbwWz1+B5'
-priv_key = read_env 'PRIVATE_ROOT_KEY', '-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
-NhAAAAAwEAAQAAAQEAxQhBHphE36rbp8E/BtgPmmqiZVzBPfRtC7UpNjXexEdbj7eeJWOr
-sQrPuZc+nOll0ufFzxzTjn8/BfYlIMiajjPew4/RzmkgHZhPsbzh2uZX/H1KXm9xoUTb6f
-L58EA3yht8HazC1JWY6jGyZx+twvx+Z8EOC8m23y3PV7S/A+z0BBluUm1GhJlCzTuOicnR
-FFoLRqHY3OlB7NGFaK/HvPVKebsuWtDBiEHgdgesuq5FXNvmjcFJGvG2NzvR7i5SZgfomC
-rvSD/6VcMt2O99xUcge1ySS+E9Y7DGX420KMj6BBlVORAvI/HVMvl5FHwnuXVmNcHTQxva
-AW8Fs9fgeQAAA8h6qyIHeqsiBwAAAAdzc2gtcnNhAAABAQDFCEEemETfqtunwT8G2A+aaq
-JlXME99G0LtSk2Nd7ER1uPt54lY6uxCs+5lz6c6WXS58XPHNOOfz8F9iUgyJqOM97Dj9HO
-aSAdmE+xvOHa5lf8fUpeb3GhRNvp8vnwQDfKG3wdrMLUlZjqMbJnH63C/H5nwQ4LybbfLc
-9XtL8D7PQEGW5SbUaEmULNO46JydEUWgtGodjc6UHs0YVor8e89Up5uy5a0MGIQeB2B6y6
-rkVc2+aNwUka8bY3O9HuLlJmB+iYKu9IP/pVwy3Y733FRyB7XJJL4T1jsMZfjbQoyPoEGV
-U5EC8j8dUy+XkUfCe5dWY1wdNDG9oBbwWz1+B5AAAAAwEAAQAAAQEAiWQHHJFrPVgD0Qdk
-rp4My01eLjYuncgKHebWdPG9g7qKcz3DrijBOTPjw3NeesYZdaaefZyJPM0oIj0QiLq5Yz
-1yMYXg9ADEHz7tG3AtQZnrcqnfKNinMKA2hP0kIc512J2vv3WPafNi7LN4xoYFgXjVn/2z
-kK64sQldkrf7lnzzFq7/3/hxiCKhkYd3MO3n213WmvCXnv/fogliIQUMRUov5A4Ib+VgMt
-livMFssyktZUK0p8Lnq4MT8G7vsPGfOC4KNVORyvhQWL3AavdrxXjm6Ss4ycudv08ZrFuw
-wvMmlZ79MpANcuc8zdZJM0qoES9PKHx8bh0EN1HitbMr3QAAAIB+NbJ8UKeFXiCnJ+IE3y
-uhCteLo8jWwThQDBHoueP7cNVIsNT2c1sryKwRS576hUy0vmoNeAUhePFiFZ1hKIJjbqtz
-wuZYb7TG0W2ohgxurTW7OEShhOsv17Y6APYd5G2fNQ15CX8D/Ij8QcPqtrxwUOJYaeQgod
-/2+2QG5ynjDgAAAIEA9Hd5M8sxmeGkLUJmQ64Xnk4f+ClzR7JWRSjFO6YPj4c5ZpBlBxvj
-mBMt/CGlMV4+29F/rWmRW0SgHNHQUUSfcqQ2tUFXMnKo5YO0vDIXV6ZSYOq7P8VFGY7qiu
-WeA3gQboC1afHP2UE+JWVA/lrQK9FRYA1mVU6dH6a75OTTRN8AAACBAM5T5S3P6mZKZA2l
-/DocqoOGF7w/Op6ARNOU0vl0hJhY7B8TvM97TfB6u3lpVyQhixxFChPrfj2mfFsT/HeX9I
-wQ9BHtc5YfU7ePa+1XuXDfd1wDgF3lxETMcIpjKDODS7hRfFD0b/q3Hv9zWzaug4C70+pU
-JMSNVvJ7sbXxrW2nAAAADnZhZ3JhbnRAazhzLTAxAQIDBA==
------END OPENSSH PRIVATE KEY-----'
-
-
 Vagrant.configure("2") do |config_all|
-    # always use Vagrants insecure key
-    config_all.ssh.insert_key = false
     # forward ssh agent to easily ssh into the different machines
-    config_all.ssh.forward_agent = true
+    #config_all.ssh.forward_agent = true
     config_all.vm.box = box
     begin config_all.vm.box_url = box_url if box_url rescue nil end
 
@@ -182,23 +132,8 @@ Vagrant.configure("2") do |config_all|
         apt-get -y autoclean
     " if upgrade
 
-    # Referencing all IPs in /etc/hosts
-    config_all.vm.provision "Network", :type => "shell", :name => "Configuring network", :inline => "
-        echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
-        sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
-        sed -i '/^127\\.\\0\\.1\\.1/d' /etc/hosts
-    "
     definitions.each do |node|
         config_all.vm.provision "#{node[:hostname]}Access", :type => "shell", :name  => "Referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
-    end
-
-    # Auto SSH
-    config_all.vm.provision "SSHRootAuthorizationFile", :type => "shell", :name => 'auto ssh', :inline => "mkdir -m 0700 -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"
-    (1..nodes).each do |node_number|
-        node_name = definitions[node_number-1][:hostname]
-        config_all.vm.provision "SSHRootAuthorizationFrom#{node_name}", :type => "shell", :name => "auto ssh from #{node_name}", :inline => "
-            grep -q 'root@#{node_name}' /root/.ssh/authorized_keys || echo 'ssh-rsa #{pub_key} root@#{node_name}' >> /root/.ssh/authorized_keys
-        "
     end
 
     # Docker Installation
@@ -270,29 +205,10 @@ EOF
                 ]
             end
 
-            if public
-                options = {}
-                options[:use_dhcp_assigned_default_route] = true
-                options[:bridge] = host_itf if host_itf
-                options[:auto_config] = false
-                config.vm.network "public_network", **options
-                
-                machine_id = (Digest::MD5.hexdigest "#{hostname} on #{vagrant_host}").upcase
-                machine_id[2] = (machine_id[2].to_i(16) & 0xFE).to_s(16).upcase # generated MAC must not be multicast
-                machine_mac = "#{machine_id[1, 2]}:#{machine_id[3, 2]}:#{machine_id[5, 2]}:#{machine_id[7, 2]}:#{machine_id[9, 2]}:#{machine_id[11, 2]}"
-                
-                config.vm.provider :virtualbox do |vb, override|
-                    vb.customize [
-                        'modifyvm', :id,
-                        '--macaddress2', "#{machine_mac.delete ':'}",
-                    ]
-                end
-            end # public itf
-
             config.vm.network :private_network, ip: ip
 
             if compose_version && master
-                config_all.vm.provision "DockerComposeInstall", :type => "shell", :name => 'Installing Docker Compose', :inline => "
+                config.vm.provision "DockerComposeInstall", :type => "shell", :name => 'Installing Docker Compose', :inline => "
                     if [ ! -x /usr/local/bin/docker-compose ]; then
                         if [ \"#{compose_version}\" == \"latest\" ]; then
                             COMPOSE_VERSION=$(curl -Isw \"%{redirect_url}\" --HEAD -o /dev/null \"https://github.com/docker/compose/releases/latest\")
@@ -308,8 +224,8 @@ EOF
                 "
             end # Compose
 
-            if etcd_version
-                config_all.vm.provision "EtcdInstall", :type => "shell", :name => 'Installing etcd', :inline => "
+            if etcd_version && node_number <= etcd_size
+                config.vm.provision "EtcdInstall", :type => "shell", :name => 'Installing etcd', :inline => "
                     if [ $(docker ps -qf 'name=etcd' | wc -l) == 0 ]; then
                         DATA=/var/lib/etcd/data
                         mkdir -p ${DATA}
@@ -318,9 +234,9 @@ EOF
                             ETCD_VERSION=\"v${ETCD_VERSION}\"
                         fi
                         IMG=\"quay.io/coreos/etcd:${ETCD_VERSION}\"
-                        CLIENT_IP=$(#{exposed_ip_script})
-                        PEER_IP=$(#{internal_ip_script})
-                        echo \" == Running ETCD on ${CLIENT_IP} (internal comm on ${PEER_IP}) == \"
+                        CLIENT_IP=#{ip}
+                        PEER_IP=#{ip}
+                        echo \" == Running ETCD on ${CLIENT_IP} == \"
                         docker pull -q ${IMG}
                         docker run -d \
                             -p 2379:2379 \
@@ -342,12 +258,16 @@ EOF
                     fi
                 "
 
-                config_all.vm.provision "EtcdctlInstall", :type => "shell", :name => 'Installing etcdctl', :inline => "
+                config.vm.provision "EtcdctlInstall", :type => "shell", :name => 'Installing etcdctl', :inline => "
                     if ! which etcdctl >/dev/null; then
                         docker cp etcd:$(docker exec etcd which etcdctl) /usr/local/bin
                     fi
                     grep -q 'ETCDCTL_API=' #{vagrant_home}/.bashrc || echo \"ETCDCTL_API=#{etcdctl_api}\" >> #{vagrant_home}/.bashrc
                 "
+
+                if master && etcd_port && etcd_port > 0
+                    config.vm.network "forwarded_port", guest: 2379, host: etcd_port
+                end # etcd master
             end # etcd
 
         end # Config node

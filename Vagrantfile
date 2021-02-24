@@ -46,6 +46,8 @@ cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', 1
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
+leader_ip = (read_env 'MASTER_IP', "192.168.10.100").split('.').map {|nbr| nbr.to_i} # private ip
+hostname_prefix = read_env 'PREFIX', 'node'
 
 docker_version = read_env 'DOCKER_VERSION', 'latest'
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
@@ -56,22 +58,17 @@ raise "Docker Compose requires Docker to be installed first" unless docker_versi
 etcd_version = read_env 'ETCD_VERSION', 'latest'
 raise "ETCD requires Docker to be installed first" unless docker_version
 etcd_size = read_env 'ETCD_SIZE', 3
-if etcd_size && etcd_version
-  etcd_size = etcd_size.to_i
+if etcd_size && etcd_size > 0 && etcd_version
   raise "Not enough servers configured: stated #{nodes} nodes while requested #{etcd_size} etcd nodes" if etcd_size > nodes
 else
-  etcd_size = 0
+    etcd_version = false
+    etcd_size = 0
 end
 etcdctl_api = read_env 'ETCDCTL_API', 3
 if read_bool_env 'ETCD_PORT'
     etcd_port = read_env 'ETCD_PORT', 0
     etcd_port = 2379 unless etcd_port.is_a? Integer
 else
-    etcd_port = 0
-end
-if ! etcd_version || etcd_size == 0 || etcd_port == 0
-    etcd_version = false
-    etcd_size = 0
     etcd_port = 0
 end
 
@@ -83,9 +80,6 @@ vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 
 host_itf = read_env 'ITF', false
-
-leader_ip = (read_env 'MASTER_IP', "192.168.10.100").split('.').map {|nbr| nbr.to_i} # private ip
-hostname_prefix = read_env 'PREFIX', 'node'
 
 upgrade = read_bool_env 'UPGRADE', false
 guest_additions = read_bool_env 'GUEST_ADDITIONS', false
@@ -131,10 +125,10 @@ Vagrant.configure("2") do |config_all|
     config_all.vm.provision "Upgrade", :type => "shell", :name => "Upgrading system", :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get dist-upgrade --yes
-        apt-get -y autoremove
-        apt-get -y autoclean
+        apt-get update -qqq
+        apt-get dist-upgrade --yes -qqq
+        apt-get -y -qqq autoremove
+        apt-get -y -qqq autoclean
     " if upgrade
 
     definitions.each do |node|
@@ -147,13 +141,13 @@ Vagrant.configure("2") do |config_all|
             if ! which docker >/dev/null; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
-                apt-get update -q
-                apt-get install --yes -q apt-transport-https ca-certificates curl gnupg2 software-properties-common
+                apt-get update -qqq
+                apt-get install --yes -qqq apt-transport-https ca-certificates curl gnupg2 software-properties-common
                 DIST=$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')
                 curl -fsSL https://download.docker.com/linux/$DIST/gpg | apt-key add -
                 apt-key fingerprint #{docker_repo_fingerprint}
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
-                apt-get update -q
+                apt-get update -qqq
                 if [ \"#{docker_version}\" == \"latest\" ]; then
                     DOCKER_VERSION='*';
                 else
@@ -165,7 +159,7 @@ Vagrant.configure("2") do |config_all|
                     CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
                 fi
                 echo \" == Installing Docker $DOCKER_VERSION and containerd $CONTAINERD_VERSION ==\"
-                apt-get install --yes -q docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
+                apt-get install --yes -qqq docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 # apt-mark hold docker-ce docker-ce-cli containerd.io
             fi
             if [ ! -f /etc/docker/daemon.json ]; then
@@ -270,11 +264,10 @@ EOF
                     grep -q 'ETCDCTL_API=' #{vagrant_home}/.bashrc || echo \"ETCDCTL_API=#{etcdctl_api}\" >> #{vagrant_home}/.bashrc
                 "
 
-                if master && etcd_port && etcd_port > 0
+                if master && etcd_port > 0
                     config.vm.network "forwarded_port", guest: 2379, host: etcd_port
                 end # etcd master
             end # etcd
-
         end # Config node
     end # node
 end # all

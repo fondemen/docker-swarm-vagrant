@@ -72,6 +72,10 @@ else
     etcd_port = 0
 end
 
+swarm = read_bool_env 'SWARM' # swarm mode is disabled by default ; use SWARM=on for setting up (only at node creation of leader)
+raise "You shouldn't disable etcd when swarm mode is enabled" if swarm && ! etcd_version
+swarm_managers = (ENV['SWARM_MANAGERS'] || "#{hostname_prefix}01").split(',').map { |node| node.strip }.select { |node| node and node != ''}
+
 box = read_env 'BOX', 'bento/debian-10' # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
@@ -268,6 +272,42 @@ EOF
                     config.vm.network "forwarded_port", guest: 2379, host: etcd_port
                 end # etcd master
             end # etcd
+
+            if swarm
+          
+                role = if node_number == 1 or swarm_managers.include? hostname then 'manager' else 'worker' end
+                config.vm.provision "EtcdctlInstall", :type => "shell", run: "always", :name => "Checking Docker SWARM", :inline => <<-EOF
+\# Checking whether a swarm already exists
+export ETCDCTL_API=2
+echo "Waiting for etcd to be availabble"
+until etcdctl cluster-health ; do
+	sleep 1
+done
+etcdctl ls | grep vagrant-swarm >/dev/null || etcdctl mkdir vagrant-swarm
+MANAGERS=$(etcdctl ls /vagrant-swarm | grep '_address$' | sed 's;^/vagrant-swarm/swarm_\\(.*\\)_address;\\1;')
+if [ -z "$MANAGERS" ]; then
+    \# first node to appear: creating swarm (if not already)
+    echo " == Initializing Docker SWARM ==";
+    docker swarm init --advertise-addr #{ip} --listen-addr #{ip}
+elif [ "0" != $(docker node list 1>/dev/null 2>&1;echo $?) ]; then
+    echo \"joining swarm as #{role}\"
+    \# iterating over manager nodes to join
+    for MANAGER in $MANAGERS; do
+        docker swarm join --token $(etcdctl get "/vagrant-swarm/swarm_${MANAGER}_token_#{role}") $(etcdctl get "/vagrant-swarm/swarm_${MANAGER}_address") && break
+    done
+fi
+if [ "#{role}" == "manager" ]; then
+    \# Storing join token in etcd
+    etcdctl get /vagrant-swarm/swarm_#{hostname}_address 1>/dev/null 2>&1 || etcdctl set /vagrant-swarm/swarm_#{hostname}_address $(docker swarm join-token worker | grep 'docker swarm join' | grep -o '[0-9]*\\.[0-9]*\\.[0-9]*\\.[0-9]*:[0-9]*$')
+    etcdctl get /vagrant-swarm/swarm_#{hostname}_token_worker 1>/dev/null 2>&1 || etcdctl set /vagrant-swarm/swarm_#{hostname}_token_worker $(docker swarm join-token -q worker)
+    etcdctl get /vagrant-swarm/swarm_#{hostname}_token_manager 1>/dev/null 2>&1 || etcdctl set /vagrant-swarm/swarm_#{hostname}_token_manager $(docker swarm join-token -q manager)
+fi
+      EOF
+         
+                # TODO: docker service create     --name portainer     --publish 9000:9000     --constraint 'node.role == manager'     --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock     portainer/portainer     -H unix:///var/run/docker.sock
+             
+            end # swarm
+
         end # Config node
     end # node
 end # all

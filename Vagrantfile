@@ -69,6 +69,11 @@ if read_bool_env 'ETCD_PORT'
 else
     etcd_port = 0
 end
+if ! etcd_version || etcd_size == 0 || etcd_port == 0
+    etcd_version = false
+    etcd_size = 0
+    etcd_port = 0
+end
 
 box = read_env 'BOX', 'bento/debian-10' # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -142,13 +147,13 @@ Vagrant.configure("2") do |config_all|
             if ! which docker >/dev/null; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
-                apt-get update
-                apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
+                apt-get update -q
+                apt-get install --yes -q apt-transport-https ca-certificates curl gnupg2 software-properties-common
                 DIST=$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')
                 curl -fsSL https://download.docker.com/linux/$DIST/gpg | apt-key add -
                 apt-key fingerprint #{docker_repo_fingerprint}
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
-                apt-get update
+                apt-get update -q
                 if [ \"#{docker_version}\" == \"latest\" ]; then
                     DOCKER_VERSION='*';
                 else
@@ -160,7 +165,7 @@ Vagrant.configure("2") do |config_all|
                     CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
                 fi
                 echo \" == Installing Docker $DOCKER_VERSION and containerd $CONTAINERD_VERSION ==\"
-                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
+                apt-get install --yes -q docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 # apt-mark hold docker-ce docker-ce-cli containerd.io
             fi
             if [ ! -f /etc/docker/daemon.json ]; then

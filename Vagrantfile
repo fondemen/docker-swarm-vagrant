@@ -62,6 +62,7 @@ if etcd_size && etcd_version
 else
   etcd_size = 0
 end
+etcdctl_api = read_env 'ETCDCTL_API', 3
 
 box = read_env 'BOX', 'bento/debian-10' # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -345,6 +346,7 @@ EOF
                     if ! which etcdctl >/dev/null; then
                         docker cp etcd:$(docker exec etcd which etcdctl) /usr/local/bin
                     fi
+                    grep -q 'ETCDCTL_API=' #{vagrant_home}/.bashrc || echo \"ETCDCTL_API=#{etcdctl_api}\" >> #{vagrant_home}/.bashrc
                 "
             end # etcd
 

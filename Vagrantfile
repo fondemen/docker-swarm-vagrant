@@ -46,7 +46,7 @@ cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', 1
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
-leader_ip = (read_env 'MASTER_IP', "192.168.99.99").split('.').map {|nbr| nbr.to_i} # private ip
+leader_ip = (read_env 'MASTER_IP', "192.168.59.99").split('.').map {|nbr| nbr.to_i} # private ip
 hostname_prefix = read_env 'PREFIX', 'node'
 
 docker_version = read_env 'DOCKER_VERSION', 'latest'
